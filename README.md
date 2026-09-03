@@ -39,10 +39,22 @@ Instead of downloading Packer from `releases.hashicorp.com` and the plugin via
 `packer init` (both blocked), it `aws s3 cp`s two pre-staged artifacts from the
 org bucket and installs them:
 
-| Artifact | S3 key (`s3://$ARTIFACT_BUCKET/$ARTIFACT_PREFIX/`) |
-|---|---|
-| Packer binary | `packer_1.11.2_linux_amd64.zip` |
-| amazon plugin (pinned to `required_plugins`) | `packer-plugin-amazon_v1.2.8_x5.0_linux_amd64.zip` |
+| Artifact | S3 key (`s3://$ARTIFACT_BUCKET/$ARTIFACT_PREFIX/`) | Upstream download |
+|---|---|---|
+| Packer binary | `packer_1.11.2_linux_amd64.zip` | <https://releases.hashicorp.com/packer/1.11.2/packer_1.11.2_linux_amd64.zip> |
+| amazon plugin (pinned to `required_plugins`) | `packer-plugin-amazon_v1.2.8_x5.0_linux_amd64.zip` | <https://github.com/hashicorp/packer-plugin-amazon/releases/download/v1.2.8/packer-plugin-amazon_v1.2.8_x5.0_linux_amd64.zip> |
+
+Checksums / signatures to verify before staging:
+
+- Packer: <https://releases.hashicorp.com/packer/1.11.2/packer_1.11.2_SHA256SUMS>
+  (`.sig` alongside; HashiCorp GPG key `72D7468F`)
+- Plugin: <https://github.com/hashicorp/packer-plugin-amazon/releases/download/v1.2.8/packer-plugin-amazon_v1.2.8_SHA256SUMS>
+  (`.sig` alongside)
+
+Other arches/OSes: swap `linux_amd64` in the Packer URL, or pick another asset
+from the [plugin v1.2.8 release page](https://github.com/hashicorp/packer-plugin-amazon/releases/tag/v1.2.8)
+(keep the `x5.0` protocol segment). All Packer versions:
+<https://releases.hashicorp.com/packer/>.
 
 1. **Stage the artifacts once** from a networked host (or the org mirror pipeline):
    ```bash
