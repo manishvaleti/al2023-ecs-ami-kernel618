@@ -1,0 +1,82 @@
+# GitLab CI/CD pipeline: build the AL2023 x86_64 ECS-optimized AMI (kernel 6.18)
+# in your own AWS account with Packer.
+#
+# This file must live at the ROOT of the repository you push to GitLab.
+# If you keep the recipe in a subdirectory, either move these files up or set
+#   PKR_DIR to that subdirectory below.
+#
+# Required CI/CD variables (Settings > CI/CD > Variables):
+#   AWS_DEFAULT_REGION   e.g. us-east-1               (plain)
+#   AWS_ACCESS_KEY_ID                                 (masked)
+#   AWS_SECRET_ACCESS_KEY                             (masked)
+#   AWS_SESSION_TOKEN    only if using temporary creds (masked)
+# Prefer OIDC (see the commented `before_script` alternative) so no long-lived keys are stored.
+
+stages:
+  - validate
+  - build
+
+variables:
+  PACKER_VERSION: "1.11.2"
+  PKR_DIR: "."
+  # Packer build instance networking. Leave SUBNET_ID empty to use the default VPC.
+  SUBNET_ID: ""
+  SSH_INTERFACE: "public_ip"          # or "session_manager" (then set IAM_INSTANCE_PROFILE + private subnet)
+  IAM_INSTANCE_PROFILE: ""
+
+default:
+  image:
+    name: "hashicorp/packer:${PACKER_VERSION}"
+    entrypoint: [""]
+  tags:
+    - docker
+  before_script:
+    - packer --version
+    - test -n "$AWS_DEFAULT_REGION" || { echo "AWS_DEFAULT_REGION is not set"; exit 1; }
+    # --- OIDC alternative (recommended): remove the static AWS_* variables above and use ---
+    # - >
+    #   export $(printf 'AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s'
+    #   $(aws sts assume-role-with-web-identity
+    #   --role-arn "$AWS_ROLE_ARN"
+    #   --role-session-name "gitlab-${CI_PIPELINE_ID}"
+    #   --web-identity-token "$GITLAB_OIDC_TOKEN"
+    #   --duration-seconds 3600
+    #   --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' --output text))
+    - cd "$PKR_DIR"
+    - packer init .
+
+validate:
+  stage: validate
+  script:
+    - packer fmt -check -diff .
+    - >
+      packer validate
+      -var "region=${AWS_DEFAULT_REGION}"
+      -var "subnet_id=${SUBNET_ID}"
+      -var "ssh_interface=${SSH_INTERFACE}"
+      -var "iam_instance_profile=${IAM_INSTANCE_PROFILE}"
+      .
+
+build-ami:
+  stage: build
+  timeout: 2h
+  script:
+    - >
+      packer build
+      -only="amazon-ebs.al2023"
+      -var "region=${AWS_DEFAULT_REGION}"
+      -var "subnet_id=${SUBNET_ID}"
+      -var "ssh_interface=${SSH_INTERFACE}"
+      -var "iam_instance_profile=${IAM_INSTANCE_PROFILE}"
+      -var 'run_tags={"pipeline":"gitlab","project":"al2023-ecs-ami"}'
+      .
+    - echo "Built AMI:" && cat manifest.json
+  artifacts:
+    paths:
+      - ${PKR_DIR}/manifest.json
+    expire_in: 90 days
+  rules:
+    # Build on manual trigger from the default branch, and on tags.
+    - if: '$CI_COMMIT_TAG'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+      when: manual

@@ -1,0 +1,5 @@
+packer
+packer.zip
+manifest.json
+crash.log
+*.auto.pkrvars.local.hcl
