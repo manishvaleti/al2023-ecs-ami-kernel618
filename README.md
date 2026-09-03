@@ -28,7 +28,43 @@ release-al2023.auto.pkrvars.hcl    pinned versions + kernel-6.18 base AMI
 scripts/ files/ additional-packages/ amazon-ecs-logs-collector/
                                    only the provisioner assets this build uses
 .gitlab-ci.yml                     validate + build pipeline
+ci/Dockerfile                      Alpine CI executor: packer + amazon plugin from S3
+ci/stage-packer-artifacts.sh       one-time: mirror packer + plugin into the org S3 bucket
 ```
+
+## Air-gapped CI image (no curl at build time)
+
+The GitLab runner image is built from [`ci/Dockerfile`](ci/Dockerfile) on Alpine.
+Instead of downloading Packer from `releases.hashicorp.com` and the plugin via
+`packer init` (both blocked), it `aws s3 cp`s two pre-staged artifacts from the
+org bucket and installs them:
+
+| Artifact | S3 key (`s3://$ARTIFACT_BUCKET/$ARTIFACT_PREFIX/`) |
+|---|---|
+| Packer binary | `packer_1.11.2_linux_amd64.zip` |
+| amazon plugin (pinned to `required_plugins`) | `packer-plugin-amazon_v1.2.8_x5.0_linux_amd64.zip` |
+
+1. **Stage the artifacts once** from a networked host (or the org mirror pipeline):
+   ```bash
+   ARTIFACT_BUCKET=triage ci/stage-packer-artifacts.sh
+   ```
+   The bucket is IaC-managed at org level; this only puts objects under the prefix.
+2. **Build the CI image.** The image builder needs `s3:GetObject` on the bucket via
+   an instance/task role (or pass static creds with a BuildKit
+   `--mount=type=secret,id=aws_creds` — see the commented line in the Dockerfile):
+   ```bash
+   docker build -t $CI_REGISTRY_IMAGE/al2023-ami-builder:latest \
+     --build-arg ARTIFACT_BUCKET=triage ci/
+   docker push $CI_REGISTRY_IMAGE/al2023-ami-builder:latest
+   ```
+3. `packer plugins install --path` drops the plugin into
+   `PACKER_PLUGIN_PATH=/usr/local/share/packer/plugins` **with its `_SHA256SUM`
+   sidecar**, so `packer validate` / `packer build` resolve it with no network and
+   the pipeline never calls `packer init`.
+
+Bump versions in one place: `ARG PACKER_VERSION` / `ARG AMAZON_PLUGIN_VERSION` in
+the Dockerfile and the defaults in `stage-packer-artifacts.sh`; the plugin version
+must equal `required_plugins.amazon.version` in `variables.pkr.hcl`.
 
 ## Running it
 
@@ -46,10 +82,12 @@ scripts/ files/ additional-packages/ amazon-ecs-logs-collector/
 
 ## Local smoke test
 
+On a networked machine (uses `packer init` to fetch the plugin):
+
 ```bash
 packer init .
 packer validate -var region=us-east-1 .
-REGION=us-east-1 packer build -only=amazon-ebs.al2023 -var region=us-east-1 .
+packer build -only=amazon-ebs.al2023 -var region=us-east-1 .
 ```
 
 ## Reproducible builds

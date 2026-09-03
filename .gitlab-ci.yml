@@ -2,38 +2,42 @@
 # in your own AWS account with Packer.
 #
 # This file must live at the ROOT of the repository you push to GitLab.
-# If you keep the recipe in a subdirectory, either move these files up or set
-#   PKR_DIR to that subdirectory below.
+# If you keep the recipe in a subdirectory, either move these files up or set PKR_DIR.
+#
+# The CI image (CI_IMAGE below) is the Alpine executor built from ci/Dockerfile:
+# it already contains `packer` and the pinned github.com/hashicorp/amazon plugin
+# (pulled from the org S3 bucket at image-build time). Because the plugin is
+# vendored into PACKER_PLUGIN_PATH, this pipeline never runs `packer init` and
+# needs no outbound access to GitHub / releases.hashicorp.com.
 #
 # Required CI/CD variables (Settings > CI/CD > Variables):
 #   AWS_DEFAULT_REGION   e.g. us-east-1               (plain)
-#   AWS_ACCESS_KEY_ID                                 (masked)
+#   AWS_ACCESS_KEY_ID                                 (masked)  - or use OIDC, see below
 #   AWS_SECRET_ACCESS_KEY                             (masked)
 #   AWS_SESSION_TOKEN    only if using temporary creds (masked)
-# Prefer OIDC (see the commented `before_script` alternative) so no long-lived keys are stored.
 
 stages:
   - validate
   - build
 
 variables:
-  PACKER_VERSION: "1.11.2"
+  CI_IMAGE: "${CI_REGISTRY_IMAGE}/al2023-ami-builder:latest"
   PKR_DIR: "."
+  PACKER_PLUGIN_PATH: "/usr/local/share/packer/plugins"
   # Packer build instance networking. Leave SUBNET_ID empty to use the default VPC.
   SUBNET_ID: ""
   SSH_INTERFACE: "public_ip"          # or "session_manager" (then set IAM_INSTANCE_PROFILE + private subnet)
   IAM_INSTANCE_PROFILE: ""
 
 default:
-  image:
-    name: "hashicorp/packer:${PACKER_VERSION}"
-    entrypoint: [""]
+  image: "${CI_IMAGE}"
   tags:
     - docker
   before_script:
-    - packer --version
+    - packer version
+    - packer plugins installed          # must list github.com/hashicorp/amazon v1.2.8
     - test -n "$AWS_DEFAULT_REGION" || { echo "AWS_DEFAULT_REGION is not set"; exit 1; }
-    # --- OIDC alternative (recommended): remove the static AWS_* variables above and use ---
+    # --- OIDC alternative (recommended): drop the static AWS_* variables and use ---
     # - >
     #   export $(printf 'AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s'
     #   $(aws sts assume-role-with-web-identity
@@ -43,7 +47,6 @@ default:
     #   --duration-seconds 3600
     #   --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' --output text))
     - cd "$PKR_DIR"
-    - packer init .
 
 validate:
   stage: validate
@@ -76,7 +79,6 @@ build-ami:
       - ${PKR_DIR}/manifest.json
     expire_in: 90 days
   rules:
-    # Build on manual trigger from the default branch, and on tags.
     - if: '$CI_COMMIT_TAG'
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
       when: manual
